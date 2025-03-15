@@ -70,18 +70,6 @@ async def entrypoint(ctx: JobContext):
 
     agent.start(ctx.room, participant)
 
-    # --- Start transcription on audio tracks ---
-    # @ctx.room.on("track_subscribed")
-    # async def on_track_subscribed(
-    #     track: rtc.Track,
-    #     publication: rtc.TrackPublication,
-    #     participant: rtc.RemoteParticipant,
-    # ):
-    #     """Trigger transcription when an audio track is subscribed."""
-    #     if track.kind == rtc.TrackKind.KIND_AUDIO:
-    #         logger.info(f"Audio track subscribed from {participant.identity}")
-    #         asyncio.create_task(handle_transcription(ctx, participant, track))
-
     # Agent greets the user
     await agent.say("Hey, how can I help you today?", allow_interruptions=True)
 

@@ -1,14 +1,11 @@
 "use client";
 
-import { useEffect, useState, useMemo, useRef } from "react";
-import { motion } from "framer-motion";
-import {
-  useConnectionState,
-  useMaybeRoomContext,
-} from "@livekit/components-react";
+import { useEffect, useState, useRef } from "react";
+import { useConnectionState, useMaybeRoomContext } from "@livekit/components-react";
 import {
   ConnectionState,
   Participant,
+  Room,
   RoomEvent,
   TrackPublication,
   TranscriptionSegment,
@@ -18,7 +15,9 @@ import {
 function useTranscriber() {
   const state = useConnectionState();
   const room = useMaybeRoomContext();
-  const [transcriptions, setTranscriptions] = useState([]);
+  const [transcriptions, setTranscriptions] = useState<
+    { id: string; sender: string; message: string }[]
+  >([]);
 
   useEffect(() => {
     if (state === ConnectionState.Disconnected) {
@@ -30,20 +29,18 @@ function useTranscriber() {
     if (!room) return;
 
     const updateTranscriptions = (
-      segments,
-      participant,
-      publication
+      segments: TranscriptionSegment[],
+      participant?: Participant,
+      publication?: TrackPublication
     ) => {
+      if (!segments.length) return;
+
       const sender = participant?.identity ?? "Bot";
       const lastSegment = segments[segments.length - 1];
-      const isFinal = lastSegment.final;
 
       setTranscriptions((prev) => {
-        if (isFinal) {
-          return [
-            ...prev,
-            { id: lastSegment.id, sender, message: lastSegment.text },
-          ];
+        if (lastSegment.final) {
+          return [...prev, { id: lastSegment.id, sender, message: lastSegment.text }];
         }
         return prev;
       });
@@ -59,9 +56,11 @@ function useTranscriber() {
 // Typewriter + Chat Bubble Component
 export default function TranscriptDisplay({ typingSpeed = 50 }) {
   const { state, transcriptions } = useTranscriber();
-  const transcriptionEndRef = useRef(null);
+  const transcriptionEndRef = useRef<HTMLDivElement>(null);
   const [isTyping, setIsTyping] = useState(false);
-  const [displayedMessages, setDisplayedMessages] = useState([]);
+  const [displayedMessages, setDisplayedMessages] = useState<
+    { id: string; sender: string; message: string }[]
+  >([]);
 
   // Format the incoming transcription segments
   useEffect(() => {
@@ -71,22 +70,24 @@ export default function TranscriptDisplay({ typingSpeed = 50 }) {
 
       let currentIndex = 0;
       const interval = setInterval(() => {
-        if (currentIndex < lastMessage.message.length) {
-          setDisplayedMessages((prev) => {
-            const updatedMessages = [...prev];
-            const existingMessage = updatedMessages.find(
-              (msg) => msg.id === lastMessage.id
-            );
+        setDisplayedMessages((prev) => {
+          const updatedMessages = [...prev];
+          const existingMessage = updatedMessages.find((msg) => msg.id === lastMessage.id);
 
-            if (existingMessage) {
-              existingMessage.message += lastMessage.message[currentIndex];
-            } else {
-              updatedMessages.push({ ...lastMessage, message: lastMessage.message[currentIndex] });
-            }
-            return updatedMessages;
-          });
-          currentIndex++;
-        } else {
+          if (existingMessage) {
+            return updatedMessages.map((msg) =>
+              msg.id === lastMessage.id
+                ? { ...msg, message: msg.message + lastMessage.message[currentIndex] }
+                : msg
+            );
+          } else {
+            return [...updatedMessages, { ...lastMessage, message: lastMessage.message[currentIndex] }];
+          }
+        });
+
+        currentIndex++;
+
+        if (currentIndex >= lastMessage.message.length) {
           setIsTyping(false);
           clearInterval(interval);
         }
@@ -107,17 +108,15 @@ export default function TranscriptDisplay({ typingSpeed = 50 }) {
           className={`mb-2 ${item.sender === "User" ? "text-right" : "text-left"}`}
         >
           <span
-            className={`px-3 py-1 rounded-lg inline-block ${item.sender === "User" ? "bg-blue-500" : "bg-green-500"}`}
+            className={`px-3 py-1 rounded-lg inline-block ${
+              item.sender === "User" ? "bg-blue-500" : "bg-green-500"
+            }`}
           >
             <strong>{item.sender}:</strong> {item.message}
           </span>
         </div>
       ))}
-      {isTyping && (
-        <div className="italic text-gray-400 text-left">
-          Bot is typing...
-        </div>
-      )}
+      {isTyping && <div className="italic text-gray-400 text-left">Bot is typing...</div>}
       <div ref={transcriptionEndRef} className="h-2" />
     </div>
   );

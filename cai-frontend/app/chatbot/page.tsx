@@ -16,7 +16,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import { MediaDeviceFailure } from "livekit-client";
 import { useCallback, useEffect, useState } from "react";
 import type { ConnectionDetails } from "../api/connection-details/route";
-import LanguageSelection from "../../components/LanguageSelection";
 import TranscriptDisplay from "../../components/TranscriptDisplay"; // ✅ Import the transcript display!
 
 export default function Page() {
@@ -43,7 +42,7 @@ export default function Page() {
 
   return (
     <main data-lk-theme="default" className="h-full grid content-center bg-[var(--lk-bg)]">
-      <LanguageSelection onSelectLanguage={handleLanguageSelect} />
+      
       <LiveKitRoom
         token={connectionDetails?.participantToken}
         serverUrl={connectionDetails?.serverUrl}
@@ -58,9 +57,7 @@ export default function Page() {
         <ControlBar onConnectButtonClicked={onConnectButtonClicked} agentState={agentState} />
         <RoomAudioRenderer />
         <NoAgentNotification state={agentState} />
-
-        {/* ✅ Show transcript here */}
-        <TranscriptDisplay />
+        <TranscriptDisplay/>
       </LiveKitRoom>
     </main>
   );

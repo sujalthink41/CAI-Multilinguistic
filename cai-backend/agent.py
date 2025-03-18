@@ -12,32 +12,70 @@ from livekit.agents import (
 from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import cartesia, openai, deepgram, silero, turn_detector
 from livekit import rtc
-from transcription_handler import handle_transcription  # Import the transcription handler
+import langid  # For language detection
 import asyncio
 from livekit.plugins import azure
-from livekit.plugins import google
 
+# Load environment variables
 load_dotenv(dotenv_path=".env.local")
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice-agent")
 
+# Mapping for Indian languages (langid format to Azure format)
+INDIAN_LANG_MAPPING = {
+    "en": "en-IN",    # English (India)
+    "hi": "hi-IN",    # Hindi
+    "ta": "ta-IN",    # Tamil
+    "te": "te-IN",    # Telugu
+    "kn": "kn-IN",    # Kannada
+    "ml": "ml-IN",    # Malayalam
+    "mr": "mr-IN",    # Marathi
+    "gu": "gu-IN",    # Gujarati
+    "pa": "pa-IN",    # Punjabi
+    "bn": "bn-IN",    # Bengali
+    "ur": "ur-IN",    # Urdu
+    "or": "or-IN",    # Odia
+    "as": "as-IN",    # Assamese
+}
 
 def prewarm(proc: JobProcess):
     """Pre-load any heavy models or processes here."""
     proc.userdata["vad"] = silero.VAD.load()
 
+def get_azure_language_code(detected_code):
+    """Convert langid language code to Azure language code format for Indian languages."""
+    return INDIAN_LANG_MAPPING.get(detected_code, "en-IN")  # Default to en-IN if not found
+
+async def detect_language(text: str) -> str:
+    """Detect the language of the input text using langid."""
+    if not text or len(text.strip()) < 3:  # Skip detection for very short texts
+        return None
+        
+    try:
+        lang_code, confidence = langid.classify(text)
+        logger.info(f"Detected language: {lang_code} (confidence: {confidence:.2f})")
+        
+        # Only return the language if confidence is high enough and it's supported
+        if confidence > 0.5 and lang_code in INDIAN_LANG_MAPPING:
+            return lang_code
+        return None
+    except Exception as e:
+        logger.error(f"Language detection failed: {e}")
+        return None
 
 async def entrypoint(ctx: JobContext):
     """Main entry point for the LiveKit voice assistant agent."""
-    # System prompt to allow dynamic language switching
     initial_ctx = llm.ChatContext().append(
         role="system",
         text=(
-            "You are a voice assistant created by LiveKit. Your interface with users will be voice. "
+            "You are a voice assistant created for users in India. Your interface with users will be voice. "
             "You should use short and concise responses, avoiding unpronouncable punctuation. "
-            "You are a voice bot who listens to the user and responds to him in the same language he speaks. "
-            "You are a multi-linguistic bot. "
-            "If the user asks you to switch languages, you will respond in the requested language. "
-            "Your default language is Hindi, but you can switch to any language the user requests."
+            "You are a multi-linguistic bot who listens to the user and responds in the same language they speak. "
+            "If they speak in Hindi, respond in Hindi using proper Devanagari script, not transliterated Hinglish. "
+            "Similarly for other Indian languages, always use the proper native script. "
+            "If the user switches languages mid-conversation, you should respond in the new language seamlessly."
         ),
     )
 
@@ -48,15 +86,21 @@ async def entrypoint(ctx: JobContext):
     participant = await ctx.wait_for_participant()
     logger.info(f"Starting voice assistant for participant {participant.identity}")
 
-    # Initialize with default language (Hindi)
-    current_language = "hi-IN"
+    # Default language settings for India
+    default_lang_code = "en"
+    default_azure_lang = "en-IN"  # English (India)
+
+    # Create Azure STT and TTS with default language
+    # Note: we're only using the parameters that are actually supported
+    azure_stt = azure.STT(language=default_azure_lang)
+    azure_tts = azure.TTS(language=default_azure_lang)
 
     # Define the voice pipeline
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
-        stt=azure.STT(language=current_language),  # Initialize STT with default language
-        llm=openai.LLM(model="gpt-4o-mini"),  # Use GPT-4 for better multilingual support
-        tts=azure.TTS(language=current_language),  # Initialize TTS with default language
+        stt=azure_stt,
+        llm=openai.LLM(model="gpt-4o-mini"),
+        tts=azure_tts,
         turn_detector=turn_detector.EOUModel(),
         min_endpointing_delay=0.5,
         max_endpointing_delay=5.0,
@@ -71,88 +115,65 @@ async def entrypoint(ctx: JobContext):
         metrics.log_metrics(agent_metrics)
         usage_collector.collect(agent_metrics)
 
+    # Track transcriptions for language detection
+    @agent.on("transcription")
+    def on_transcription(transcription):
+        """Log transcriptions in the original script."""
+        logger.info(f"Transcription: {transcription.text}")
+
+    # Start the agent
     agent.start(ctx.room, participant)
 
-    # Agent greets the user in the default language (Hindi)
-    await agent.say("नमस्ते, मैं आपकी कैसे मदद कर सकता हूँ?", allow_interruptions=True)
+    # Greet the user in Hindi and English (bilingual greeting for India)
+    await agent.say("नमस्ते! Hey, how can I help you today?", allow_interruptions=True)
 
-    # Main loop to handle dynamic language switching
+    # Current language tracking
+    current_lang_code = default_lang_code
+    
+    # Main conversation loop
     while True:
         # Wait for user input
-        user_input = await agent.listen()
+        transcription = await agent.wait_for_transcription()
+        user_text = transcription.text
+        
+        if not user_text:
+            continue
 
         # Detect the language of the user's input
-        detected_language = await detect_language(user_input)
+        detected_lang = await detect_language(user_text)
+        
+        if detected_lang and detected_lang != current_lang_code:
+            # Language has changed
+            current_lang_code = detected_lang
+            azure_lang_code = get_azure_language_code(detected_lang)
+            
+            logger.info(f"Language switched to: {detected_lang} (Azure: {azure_lang_code})")
+            
+            # Update the STT language - simplified to match available API
+            agent.stt = azure.STT(language=azure_lang_code)
+            
+            # Update the TTS language
+            agent.tts = azure.TTS(language=azure_lang_code)
+            
+            # Inform the LLM of the language change with script instructions
+            script_instruction = ""
+            if detected_lang == "hi":
+                script_instruction = " Use Devanagari script, not transliterated Hinglish."
+            elif detected_lang in ["ta", "te", "ml", "kn", "bn", "gu", "mr", "pa", "ur", "or", "as"]:
+                script_instruction = " Use the proper native script for this language."
+                
+            agent.chat_ctx.append(
+                role="system",
+                text=f"The user is now speaking in {detected_lang} ({azure_lang_code}).{script_instruction} Please respond in this language.",
+            )
 
-        # If the user explicitly requests a language change, update the bot's language
-        if "switch to" in user_input.lower() or "change language to" in user_input.lower():
-            requested_language = extract_language_from_request(user_input)
-            if requested_language:
-                current_language = requested_language
-                agent.stt = azure.STT(language=current_language)
-                agent.tts = azure.TTS(language=current_language)
-                await agent.say(f"Language switched to {requested_language}.", allow_interruptions=True)
-                continue
+        # Generate a response in the detected language
+        response = await agent.llm.generate(
+            llm.ChatContext().append(role="user", text=user_text)
+        )
 
-        # Respond in the detected or current language
-        response = await generate_response(user_input, current_language)
-        await agent.say(response, allow_interruptions=True)
-
-
-async def detect_language(text: str) -> str:
-    """Detect the language of the user's input using Azure STT."""
-    # Use Azure STT to detect the language
-    stt = azure.STT()
-    result = await stt.recognize(text)
-    return result.language
-
-
-def extract_language_from_request(text: str) -> str:
-    """Extract the requested language from the user's input."""
-    # Example: "Switch to Hindi" -> "hi-IN"
-    language_mapping = {
-    "hindi": "hi-IN",  # Hindi
-    "english": "en-US",  # English
-    "tamil": "ta-IN",  # Tamil
-    "telugu": "te-IN",  # Telugu
-    "kannada": "kn-IN",  # Kannada
-    "malayalam": "ml-IN",  # Malayalam
-    "marathi": "mr-IN",  # Marathi
-    "bengali": "bn-IN",  # Bengali
-    "gujarati": "gu-IN",  # Gujarati
-    "punjabi": "pa-IN",  # Punjabi
-    "odia": "or-IN",  # Odia
-    "urdu": "ur-IN",  # Urdu
-    "assamese": "as-IN",  # Assamese
-    "bhojpuri": "bho-IN",  # Bhojpuri (Note: Azure may not support Bhojpuri directly)
-    "kashmiri": "ks-IN",  # Kashmiri
-    "konkani": "kok-IN",  # Konkani
-    "nepali": "ne-IN",  # Nepali
-    "sanskrit": "sa-IN",  # Sanskrit
-    "sindhi": "sd-IN",  # Sindhi
-    "dogri": "doi-IN",  # Dogri
-    "maithili": "mai-IN",  # Maithili
-    "spanish": "es-ES",  # Spanish
-    "french": "fr-FR",  # French
-    # Add more languages as needed
-}
-
-    for lang_name, lang_code in language_mapping.items():
-        if lang_name in text.lower():
-            return lang_code
-
-    return None
-
-
-async def generate_response(user_input: str, language: str) -> str:
-    """Generate a response in the specified language using the LLM."""
-    # Use the LLM to generate a response in the requested language
-    llm = openai.LLM(model="gpt-40-mini")
-    response = await llm.generate(
-        prompt=f"Respond to the following in {language}: {user_input}"
-    )
-    return response
-
+        # Speak the response in the current language
+        await agent.say(response.text, allow_interruptions=True)
 
 if __name__ == "__main__":
     # Run the agent using LiveKit's CLI utility

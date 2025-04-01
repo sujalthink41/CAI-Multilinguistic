@@ -1,45 +1,62 @@
-import { motion } from 'framer-motion';
-import { Globe } from 'lucide-react';
-import { cn } from '../lib/utils';
+"use client";
 
-const languages = [
-  { code: 'en', name: 'English' },
-  { code: 'hi', name: 'हिंदी' },
-  { code: 'ta', name: 'தமிழ்' },
-  { code: 'te', name: 'తెలుగు' },
-];
+import { useState } from "react";
 
-interface LanguageSelectorProps {
-  selectedLanguage: string;
-  onLanguageChange: (code: string) => void;
-}
+const LanguageSelector = () => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedOption, setSelectedOption] = useState("Select an option");
 
-export function LanguageSelector({ selectedLanguage, onLanguageChange }: LanguageSelectorProps) {
+  const options = ["Option 1", "Option 2", "Option 3", "Option 4"];
+
+  const toggleDropdown = () => setIsOpen(!isOpen);
+  const selectOption = (option: string) => {
+    setSelectedOption(option);
+    setIsOpen(false);
+  };
+
   return (
-    <motion.div
-      initial={{ opacity: 0, y: -20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="relative group"
-    >
-      <button className="flex items-center gap-2 px-4 py-2 bg-white/10 backdrop-blur-lg rounded-full text-white hover:bg-white/20 transition-all">
-        <Globe className="w-4 h-4" />
-        <span>{languages.find(l => l.code === selectedLanguage)?.name}</span>
-      </button>
-      
-      <div className="absolute right-0 mt-2 w-48 py-2 bg-white/10 backdrop-blur-lg rounded-xl shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
-        {languages.map((lang) => (
-          <button
-            key={lang.code}
-            onClick={() => onLanguageChange(lang.code)}
-            className={cn(
-              "w-full px-4 py-2 text-left text-white hover:bg-white/20 transition-all",
-              selectedLanguage === lang.code && "bg-white/20"
-            )}
+    <div className="relative inline-block text-left">
+      <div>
+        <button
+          type="button"
+          onClick={toggleDropdown}
+          className="inline-flex justify-center w-full rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none"
+        >
+          {selectedOption}
+          <svg
+            className="-mr-1 ml-2 h-5 w-5"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            aria-hidden="true"
           >
-            {lang.name}
-          </button>
-        ))}
+            <path
+              fillRule="evenodd"
+              d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+              clipRule="evenodd"
+            />
+          </svg>
+        </button>
       </div>
-    </motion.div>
+
+      {isOpen && (
+        <div className="origin-top-right absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5">
+          <div className="py-1" role="menu">
+            {options.map((option) => (
+              <button
+                key={option}
+                onClick={() => selectOption(option)}
+                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                role="menuitem"
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
-}
+};
+
+export default LanguageSelector;

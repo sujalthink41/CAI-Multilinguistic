@@ -3,6 +3,7 @@ import asyncio
 from typing import Optional
 
 from dotenv import load_dotenv
+from livekit import api, rtc
 from livekit.agents import (
     AutoSubscribe,
     JobContext,
@@ -11,7 +12,7 @@ from livekit.agents import (
     cli,
     llm,
     metrics,
-    stt,  # Import stt module for SpeechEvent
+    stt,  
 )
 from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import openai, azure, silero, turn_detector
@@ -19,6 +20,74 @@ from livekit.plugins import openai, azure, silero, turn_detector
 load_dotenv(dotenv_path=".env.local")
 logger = logging.getLogger("voice-agent")
 
+stt_plugin = None
+tts_plugin = None
+
+LANGUAGES = ["en-US", "hi-IN", "bn-IN", "pa-IN"]
+
+class AssistantFnc(llm.FunctionContext):
+    def __init__(self, *, api: api.LiveKitAPI, participant: rtc.RemoteParticipant, room: rtc.Room): 
+        super().__init__()
+        self.api = api
+        self.participant = participant
+        self.room = room
+    
+
+    @llm.ai_callable()
+    async def set_language(self, detected_language: str) -> None:
+        """This is a function that sets the language of the assistant.
+        Call this function when you're certain the language is changed over 90%. 
+        DO NOT CALL THIS FUNCTION UNDER ANY OTHER CIRCUMSTANCES. ONLY CALL THIS WHEN YOU"RE SURE THE USER HAS CHANGED THEIR LANGUAGE.
+        
+        Args(IMPORTANT): 
+            detected_language (str): The language code of the new language. These are the supported languages.
+                    "English (United States)": "en-US",
+                    "Hindi (India)": "hi-IN",
+                    "Bengali (India)": "bn-IN",
+                    "Punjabi (India)": "pa-IN"
+        
+        If the user is speaking any other languages other than these four, default to english.
+
+        Returns: None
+        """
+        global stt_plugin
+        global tts_plugin
+
+        print("**************************Called function set_language with language: ", detected_language)
+        
+        # Map language codes to appropriate voices
+        voice_mapping = {
+            "en-US": "en-IN-RehaanNeural",
+            "hi-IN": "hi-IN-KavyaNeural",
+            "bn-IN": "bn-IN-TanishaaNeural",
+            "pa-IN": "pa-IN-VaaniNeural"
+        }
+        
+        # Get the corresponding voice for the detected language
+        voice = voice_mapping.get(detected_language, "en-IN-RehaanNeural")  # Default to English voice if language not found
+        
+        # stt_plugin.update_options(language=detected_language)
+        # Update the TTS options with the new language and voice
+        tts_plugin.update_options(language=detected_language, voice=voice)
+        
+        print(f"**************************TTS language updated to: {detected_language}, voice: {voice}")
+        
+        # Generate a greeting in the detected language
+        greetings = {
+            "en-US": "I've switched to English. How can I help you?",
+            "hi-IN": "मैंने हिंदी में स्विच किया है। मैं आपकी कैसे मदद कर सकता हूँ?",
+            "bn-IN": "আমি বাংলায় স্যুইচ করেছি। আমি আপনাকে কীভাবে সাহায্য করতে পারি?",
+            "pa-IN": "ਮੈਂ ਪੰਜਾਬੀ ਵਿੱਚ ਸਵਿੱਚ ਕੀਤਾ ਹੈ। ਮੈਂ ਤੁਹਾਡੀ ਕਿਵੇਂ ਮਦਦ ਕਰ ਸਕਦਾ ਹਾਂ?"
+        }
+        
+        # Get the greeting in the detected language
+        greeting = greetings.get(detected_language, greetings["en-US"])
+        
+        # Say the greeting in the detected language
+        agent = VoicePipelineAgent.get_current()
+        if agent:
+            await agent.say(greeting, allow_interruptions=True)
+    
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -33,7 +102,6 @@ async def entrypoint(ctx: JobContext):
         "- You will carefully detect the language the user is speaking in and respond in the same language. "
         "- If the user switches their language mid-conversation, you must immediately switch to the user's new language and respond in that language. "
         "- Always assess the user's language carefully and ensure your responses are in the correct language. "
-        "- If the user speaks in Hinglish (a blend of Hindi and English), you should also respond in Hinglish to maintain a smoother, more natural conversation. "
         "- Your responses should be short, concise, and easy to understand. "
         "- Avoid using unpronounceable punctuation or complex sentences. "
     ),
@@ -47,9 +115,20 @@ async def entrypoint(ctx: JobContext):
     participant = await ctx.wait_for_participant()
     logger.info(f"Starting voice assistant for participant {participant.identity}")
 
+    global stt_plugin
+    global tts_plugin
+
+    print("********************************I'm first")
     # Initialize Azure STT and TTS
-    stt_plugin = azure.STT(languages=["en-US", "hi-IN", "ta-IN", "kn-IN"])
-    tts_plugin = azure.TTS()
+    stt_plugin = azure.STT(languages=LANGUAGES)
+
+    print("********************************", vars(stt_plugin))
+    # Initialize TTS with default language and voice
+    tts_plugin = azure.TTS(language="en-US", voice="en-IN-RehaanNeural")
+
+    print(participant.metadata)
+
+
 
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
@@ -60,47 +139,8 @@ async def entrypoint(ctx: JobContext):
         min_endpointing_delay=0.5,
         max_endpointing_delay=5.0,
         chat_ctx=initial_ctx,
+        fnc_ctx=AssistantFnc(api=ctx.api, participant=participant, room=ctx.room),
     )
-
-    usage_collector = metrics.UsageCollector()
-
-    @agent.on("metrics_collected")
-    def on_metrics_collected(agent_metrics: metrics.AgentMetrics):
-        metrics.log_metrics(agent_metrics)
-        usage_collector.collect(agent_metrics)
-
-    # Track the current language
-    current_language = "en-US"  # Default language
-
-    @agent.on("user_speech_committed")
-    def on_user_speech_committed(event: stt.SpeechEvent):
-        logger.info("***************************user_speech_committed event received")  # Log when the event is received
-        # logger.info(f"Event type: {type(event)}")  # Log the type of the event object
-        # Use asyncio.create_task to handle async operations
-        asyncio.create_task(_handle_user_speech_committed(event))
-
-    async def _handle_user_speech_committed(event: stt.SpeechEvent):
-        nonlocal current_language
-
-        # Log the event object and its properties
-        logger.info(f"Event details: {event}")
-        logger.info(f"Event type: {event.type}")
-        logger.info(f"Event alternatives: {event.alternatives}")
-
-        # Get the detected language from the STT event
-        if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-            detected_language = event.alternatives[0].language
-            logger.info(f"*************************Detected language: {detected_language}")  # Log the detected language
-            if detected_language and detected_language != current_language:
-                logger.info(f"************************Detected language change: {current_language} -> {detected_language}")
-                current_language = detected_language
-
-                # Update STT and TTS languages dynamically
-                stt_plugin.update_options(languages=[detected_language])
-                tts_plugin.update_options(language=detected_language)
-
-                # Notify the user of the language switch
-                await agent.say(f"Switching to {detected_language}.", allow_interruptions=False)
 
     agent.start(ctx.room, participant)
 

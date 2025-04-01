@@ -1,3 +1,4 @@
+import { metadata } from "framer-motion/client";
 import { AccessToken, AccessTokenOptions, VideoGrant } from "livekit-server-sdk";
 import { NextResponse } from "next/server";
 
@@ -84,6 +85,7 @@ export async function POST(request: Request) {
       },
       roomName
     );
+    print()
 
     // Return connection details
     const data: ConnectionDetails = {

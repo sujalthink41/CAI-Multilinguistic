@@ -17,6 +17,8 @@ import { MediaDeviceFailure } from "livekit-client";
 import { useCallback, useEffect, useState } from "react";
 import type { ConnectionDetails } from "../api/connection-details/route";
 import TranscriptDisplay from "../../components/TranscriptDisplay"; // ✅ Import the transcript display!
+import SimpleDropdown from "@/components/SimpleDropdown";
+import LanguageSelector from "@/components/LanguageSelector";
 
 export default function Page() {
   const [connectionDetails, updateConnectionDetails] = useState<ConnectionDetails | undefined>(
@@ -41,8 +43,8 @@ export default function Page() {
   };
 
   return (
-    <main data-lk-theme="default" className="h-full grid content-center bg-[var(--lk-bg)]">
-      
+    <>
+<main data-lk-theme="default" className="h-full grid content-center bg-[var(--lk-bg)] mt-36">
       <LiveKitRoom
         token={connectionDetails?.participantToken}
         serverUrl={connectionDetails?.serverUrl}
@@ -59,7 +61,10 @@ export default function Page() {
         <NoAgentNotification state={agentState} />
         <TranscriptDisplay/>
       </LiveKitRoom>
+  <LanguageSelector/>
     </main>
+    </>
+    
   );
 }
 
